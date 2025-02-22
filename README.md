@@ -34,3 +34,10 @@ The simulation includes:
 ---
 
 ## Repository Structure
+/Network-Simulation-NS3/
+├── /src/ # Source code files
+├── /results/ # Generated output files
+├── /docs/ # Documentation (optional)
+├── README.md # Project overview and instructions
+├── LICENSE # License file
+└── .gitignore # Ignore unnecessary file
