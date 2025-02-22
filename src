@@ -1,0 +1,623 @@
+#include <iostream>
+#include <fstream>
+#include <sstream>
+#include <string>
+#include <queue>
+#include <vector>
+#include <limits>
+#include <cmath>
+#include <cstdlib>
+#include <ctime>
+#include <map>
+#include "ns3/core-module.h"
+#include "ns3/applications-module.h"
+#include "ns3/network-module.h"
+#include "ns3/internet-module.h"
+#include "ns3/point-to-point-module.h"
+#include "ns3/ipv4-global-routing-helper.h"
+#include "ns3/traffic-control-module.h"
+
+using namespace ns3;
+
+NS_LOG_COMPONENT_DEFINE("DijkstraRouting");
+
+// Network topology constants
+const uint32_t NUM_CLIENTS = 6;
+const uint32_t NUM_ROUTERS = 8;
+const uint32_t NUM_SERVERS = 6;
+const uint32_t TOTAL_NODES = NUM_CLIENTS + NUM_ROUTERS + NUM_SERVERS;
+
+// Helper function to check if a file is empty.
+bool IsFileEmpty(const std::string &filename) {
+    std::ifstream in(filename, std::ios::binary);
+    return in.peek() == std::ifstream::traits_type::eof();
+}
+
+// Structure to represent network connections
+struct Connection {
+    double delay;
+    double dataRate;
+    bool exists;
+    
+    Connection() : delay(0), dataRate(0), exists(false) {}
+    Connection(double d, double r) : delay(d), dataRate(r), exists(true) {}
+};
+
+// Structure for Dijkstra's algorithm results
+struct DijkstraResult {
+    std::vector<double> distance;
+    std::vector<int> predecessor;
+};
+
+// Forward declarations for centrality functions
+std::vector<int> ComputeDegreeCentrality(const std::vector<std::vector<Connection>>& network);
+std::vector<double> ComputeEigenvectorCentrality(const std::vector<std::vector<Connection>>& network);
+std::vector<double> ComputeKatzCentrality(const std::vector<std::vector<Connection>>& network);
+std::vector<double> ComputePageRank(const std::vector<std::vector<Connection>>& network);
+
+// Implementation of Dijkstra's algorithm
+DijkstraResult findShortestPaths(const std::vector<std::vector<Connection>>& network, int source) {
+    std::vector<double> distance(TOTAL_NODES, std::numeric_limits<double>::infinity());
+    std::vector<int> predecessor(TOTAL_NODES, -1);
+    std::vector<bool> visited(TOTAL_NODES, false);
+
+    distance[source] = 0;
+
+    for (uint32_t count = 0; count < TOTAL_NODES - 1; count++) {
+        double min = std::numeric_limits<double>::infinity();
+        int minIndex = -1;
+
+        // Find vertex with minimum distance
+        for (uint32_t v = 0; v < TOTAL_NODES; v++) {
+            if (!visited[v] && distance[v] < min) {
+                min = distance[v];
+                minIndex = v;
+            }
+        }
+
+        if (minIndex == -1) break;
+        visited[minIndex] = true;
+
+        // Update distances of adjacent vertices
+        for (uint32_t v = 0; v < TOTAL_NODES; v++) {
+            if (!visited[v] && network[minIndex][v].exists && 
+                distance[minIndex] + network[minIndex][v].delay < distance[v]) {
+                    distance[v] = distance[minIndex] + network[minIndex][v].delay;
+                    predecessor[v] = minIndex;
+            }
+        }
+    }
+
+    return {distance, predecessor};
+}
+
+// Function to find best server for a client
+int findBestServer(const std::vector<std::vector<Connection>>& network, int clientId) {
+    DijkstraResult result = findShortestPaths(network, clientId);
+    
+    int bestServer = -1;
+    double minDistance = std::numeric_limits<double>::infinity();
+    
+    // Find server with shortest path
+    for (uint32_t i = 0; i < NUM_SERVERS; i++) {
+        int serverId = NUM_CLIENTS + NUM_ROUTERS + i;
+        if (result.distance[serverId] < minDistance) {
+            minDistance = result.distance[serverId];
+            bestServer = serverId;
+        }
+    }
+    
+    std::cout << "Client " << clientId << " best server: " << bestServer 
+              << " (distance: " << minDistance << "ms)" << std::endl;
+    return bestServer;
+}
+
+// Function to print the network topology matrix
+void PrintNetworkTopology(const std::vector<std::vector<Connection>>& network) {
+    std::cout << "Network Topology Matrix:" << std::endl;
+    for (uint32_t i = 0; i < TOTAL_NODES; i++) {
+        for (uint32_t j = 0; j < TOTAL_NODES; j++) {
+            if (network[i][j].exists) {
+                std::cout << "Node " << i << " -> Node " << j 
+                          << ": Delay = " << network[i][j].delay << "ms, "
+                          << "DataRate = " << network[i][j].dataRate << "Mbps" << std::endl;
+            }
+        }
+    }
+}
+
+// Centrality calculation functions
+std::vector<int> ComputeDegreeCentrality(const std::vector<std::vector<Connection>>& network) {
+    std::vector<int> degrees(TOTAL_NODES, 0);
+    for (uint32_t i = 0; i < TOTAL_NODES; ++i) {
+        for (uint32_t j = 0; j < TOTAL_NODES; ++j) {
+            if (network[i][j].exists) {
+                degrees[i]++;
+            }
+        }
+    }
+    return degrees;
+}
+
+std::vector<double> ComputeEigenvectorCentrality(const std::vector<std::vector<Connection>>& network) {
+    const int maxIterations = 1000;
+    const double tolerance = 1e-6;
+    std::vector<double> centrality(TOTAL_NODES, 1.0);
+
+    for (int iter = 0; iter < maxIterations; ++iter) {
+        std::vector<double> new_centrality(TOTAL_NODES, 0.0);
+        for (uint32_t i = 0; i < TOTAL_NODES; ++i) {
+            for (uint32_t j = 0; j < TOTAL_NODES; ++j) {
+                if (network[i][j].exists) {
+                    new_centrality[i] += centrality[j];
+                }
+            }
+        }
+
+        double norm = 0.0;
+        for (double val : new_centrality) {
+            norm += val * val;
+        }
+        norm = sqrt(norm);
+        if (norm < 1e-6) norm = 1.0;
+
+        double diff = 0.0;
+        for (uint32_t i = 0; i < TOTAL_NODES; ++i) {
+            double old = centrality[i];
+            centrality[i] = new_centrality[i] / norm;
+            diff += std::abs(centrality[i] - old);
+        }
+
+        if (diff < tolerance) break;
+    }
+    return centrality;
+}
+
+std::vector<double> ComputeKatzCentrality(const std::vector<std::vector<Connection>>& network) {
+    const double alpha = 0.1;
+    const int maxIterations = 1000;
+    const double tolerance = 1e-6;
+    std::vector<double> centrality(TOTAL_NODES, 1.0);
+
+    for (int iter = 0; iter < maxIterations; ++iter) {
+        std::vector<double> new_centrality(TOTAL_NODES, 0.0);
+        for (uint32_t i = 0; i < TOTAL_NODES; ++i) {
+            double sum = 0.0;
+            for (uint32_t j = 0; j < TOTAL_NODES; ++j) {
+                if (network[i][j].exists) {
+                    sum += centrality[j];
+                }
+            }
+            new_centrality[i] = alpha * sum + 1.0;
+        }
+
+        double diff = 0.0;
+        for (uint32_t i = 0; i < TOTAL_NODES; ++i) {
+            diff += std::abs(new_centrality[i] - centrality[i]);
+            centrality[i] = new_centrality[i];
+        }
+
+        if (diff < tolerance) break;
+    }
+    return centrality;
+}
+
+std::vector<double> ComputePageRank(const std::vector<std::vector<Connection>>& network) {
+    const double damping = 0.85;
+    const int maxIterations = 1000;
+    const double tolerance = 1e-6;
+    std::vector<double> pr(TOTAL_NODES, 1.0 / TOTAL_NODES);
+    std::vector<int> out_degree(TOTAL_NODES, 0);
+
+    for (uint32_t i = 0; i < TOTAL_NODES; ++i) {
+        for (uint32_t j = 0; j < TOTAL_NODES; ++j) {
+            if (network[i][j].exists) {
+                out_degree[i]++;
+            }
+        }
+    }
+
+    for (int iter = 0; iter < maxIterations; ++iter) {
+        std::vector<double> new_pr(TOTAL_NODES, 0.0);
+        double sum = 0.0;
+
+        for (uint32_t j = 0; j < TOTAL_NODES; ++j) {
+            if (out_degree[j] == 0) {
+                sum += pr[j] / TOTAL_NODES;
+            }
+        }
+
+        for (uint32_t i = 0; i < TOTAL_NODES; ++i) {
+            new_pr[i] = (1.0 - damping) / TOTAL_NODES + damping * sum;
+            for (uint32_t j = 0; j < TOTAL_NODES; ++j) {
+                if (network[j][i].exists && out_degree[j] != 0) {
+                    new_pr[i] += damping * pr[j] / out_degree[j];
+                }
+            }
+        }
+
+        double diff = 0.0;
+        for (uint32_t i = 0; i < TOTAL_NODES; ++i) {
+            diff += std::abs(new_pr[i] - pr[i]);
+            pr[i] = new_pr[i];
+        }
+
+        if (diff < tolerance) break;
+    }
+    return pr;
+}
+
+//------------------------------------------------------
+// Tracing functions and globals for per-router trace files
+//------------------------------------------------------
+
+// Global maps for queue trace streams and drop trace streams.
+std::map<uint32_t, Ptr<OutputStreamWrapper>> g_queueStreams;
+std::map<uint32_t, Ptr<OutputStreamWrapper>> g_dropStreams;
+
+// Global maps to hold cumulative dropped packet counts and previous counts per router.
+std::map<uint32_t, uint64_t> g_droppedPackets;
+std::map<uint32_t, uint64_t> g_prevDroppedPackets;
+
+// Callback for tracing the queue size. Writes the simulation time and new queue size.
+static void
+TraceQueueSize(Ptr<OutputStreamWrapper> qStream, uint32_t /*oldQSize*/, uint32_t newQSize)
+{
+    *qStream->GetStream() << Simulator::Now().GetSeconds() << "\t" << newQSize << std::endl;
+}
+
+// Callback for drop events. Instead of writing text, we simply increment the drop counter.
+// The router id is bound to this callback.
+static void
+PacketDropCounter(uint32_t routerId, Ptr<const Packet> /*p*/)
+{
+    g_droppedPackets[routerId]++;
+}
+
+// This function logs, every second, the number of packets dropped during the past second.
+static void
+TraceRouterDrops(uint32_t routerId)
+{
+    uint64_t diff = g_droppedPackets[routerId] - g_prevDroppedPackets[routerId];
+    *g_dropStreams[routerId]->GetStream() << Simulator::Now().GetSeconds() << "\t" << diff << std::endl;
+    g_prevDroppedPackets[routerId] = g_droppedPackets[routerId];
+    Simulator::Schedule(Seconds(1.0), &TraceRouterDrops, routerId);
+}
+
+// SetupTracing: For each router device, if the node is a router then create (if needed)
+// router-specific trace files, bind the callbacks, and initialize drop counters.
+void SetupTracing(const std::vector<NetDeviceContainer>& devices)
+{
+    AsciiTraceHelper ascii;
+    for (uint32_t i = 0; i < devices.size(); i++) {
+        for (uint32_t j = 0; j < devices[i].GetN(); j++) {
+            Ptr<NetDevice> dev = devices[i].Get(j);
+            Ptr<Node> node = dev->GetNode();
+            
+            // Check if this node is a router.
+            if (node->GetId() >= NUM_CLIENTS && node->GetId() < NUM_CLIENTS + NUM_ROUTERS) {
+                // Find the device index in the node's device list.
+                int32_t devIndex = -1;
+                for (uint32_t k = 0; k < node->GetNDevices(); ++k) {
+                    if (node->GetDevice(k) == dev) {
+                        devIndex = k;
+                        break;
+                    }
+                }
+                if (devIndex == -1) {
+                    std::cerr << "Device not found in node's device list" << std::endl;
+                    continue;
+                }
+                
+                // Create the queue trace file for this router if not already created.
+                if (g_queueStreams.find(node->GetId()) == g_queueStreams.end()) {
+                    std::stringstream qFileName;
+                    qFileName << "queue_router_" << node->GetId() << ".tr";
+                    g_queueStreams[node->GetId()] = ascii.CreateFileStream(qFileName.str());
+                }
+                
+                // Create the drop trace file for this router if not already created.
+                if (g_dropStreams.find(node->GetId()) == g_dropStreams.end()) {
+                    std::stringstream dFileName;
+                    dFileName << "drops_router_" << node->GetId() << ".tr";
+                    g_dropStreams[node->GetId()] = ascii.CreateFileStream(dFileName.str());
+                    // Also initialize drop counters for this router.
+                    g_droppedPackets[node->GetId()] = 0;
+                    g_prevDroppedPackets[node->GetId()] = 0;
+                }
+                
+                // Build the correct path for queue tracing.
+                std::stringstream queuePath;
+                queuePath << "/NodeList/" << node->GetId() << "/DeviceList/" << devIndex
+                          << "/$ns3::PointToPointNetDevice/TxQueue/PacketsInQueue";
+                Config::ConnectWithoutContext(queuePath.str(), 
+                                              MakeBoundCallback(&TraceQueueSize, g_queueStreams[node->GetId()]));
+                
+                // Build the correct path for drop events.
+                std::stringstream dropPath;
+                dropPath << "/NodeList/" << node->GetId() << "/DeviceList/" << devIndex
+                         << "/$ns3::PointToPointNetDevice/TxQueue/Drop";
+                // Bind the router id to the drop callback so that the appropriate counter is incremented.
+                Config::ConnectWithoutContext(dropPath.str(), 
+                                              MakeBoundCallback(&PacketDropCounter, node->GetId()));
+                
+                std::cout << "Tracing router " << node->GetId() << ", device " << devIndex << std::endl;
+            }
+        }
+    }
+}
+
+int main(int argc, char *argv[])
+{
+    std::srand(std::time(0));
+    CommandLine cmd(__FILE__);
+    cmd.Parse(argc, argv);
+
+    NodeContainer nodes;
+    nodes.Create(TOTAL_NODES);
+
+    // Client-Router p2p links
+    PointToPointHelper p2p_ClientRouter;
+    p2p_ClientRouter.SetDeviceAttribute("DataRate", DataRateValue(DataRate(300000)));
+    p2p_ClientRouter.SetChannelAttribute("Delay", TimeValue(MilliSeconds(2)));
+
+    // Router-Server (and router-router) p2p links
+    PointToPointHelper p2p_RouterServer;
+    p2p_RouterServer.SetDeviceAttribute("DataRate", DataRateValue(DataRate(200000)));
+    p2p_RouterServer.SetChannelAttribute("Delay", TimeValue(MilliSeconds(2)));
+    // Do not set an explicit drop-tail queue here to avoid conflict with RED.
+    p2p_RouterServer.DisableFlowControl();
+
+    std::vector<std::vector<Connection>> network(TOTAL_NODES, std::vector<Connection>(TOTAL_NODES));
+    std::vector<NetDeviceContainer> devices;
+
+    // Client-Router connections
+    for (uint32_t i = 0; i < NUM_CLIENTS; i++) {
+        NetDeviceContainer dev = p2p_ClientRouter.Install(nodes.Get(i), nodes.Get(NUM_CLIENTS));
+        devices.push_back(dev);
+        double delay = 2.0 + (std::rand() % 4) * 0.5;
+        network[i][NUM_CLIENTS] = Connection(delay, 3.0);
+        network[NUM_CLIENTS][i] = Connection(delay, 3.0);
+    }
+
+    // Router-Router connections
+    for (uint32_t i = 0; i < NUM_ROUTERS; i++) {
+        for (uint32_t j = i + 1; j < NUM_ROUTERS; j++) {
+            NetDeviceContainer dev = p2p_RouterServer.Install(nodes.Get(NUM_CLIENTS + i), nodes.Get(NUM_CLIENTS + j));
+            devices.push_back(dev);
+            double delay = 2.0 + (i + j) * 0.2;
+            network[NUM_CLIENTS + i][NUM_CLIENTS + j] = Connection(delay, 2.0);
+            network[NUM_CLIENTS + j][NUM_CLIENTS + i] = Connection(delay, 2.0);
+        }
+    }
+
+    // Ensure router connectivity
+    for (uint32_t i = 0; i < NUM_ROUTERS; i++) {
+        bool isConnected = false;
+        for (uint32_t j = 0; j < NUM_ROUTERS; j++) {
+            if (i != j && network[NUM_CLIENTS + i][NUM_CLIENTS + j].exists) {
+                isConnected = true;
+                break;
+            }
+        }
+        if (!isConnected) {
+            uint32_t j = (i + 1) % NUM_ROUTERS;
+            NetDeviceContainer dev = p2p_RouterServer.Install(nodes.Get(NUM_CLIENTS + i), nodes.Get(NUM_CLIENTS + j));
+            devices.push_back(dev);
+            double delay = 2.0 + (i + j) * 0.2;
+            network[NUM_CLIENTS + i][NUM_CLIENTS + j] = Connection(delay, 2.0);
+            network[NUM_CLIENTS + j][NUM_CLIENTS + i] = Connection(delay, 2.0);
+        }
+    }
+
+    // Server connections
+    for (uint32_t i = 0; i < NUM_SERVERS; i++) {
+        uint32_t routerIndex = NUM_CLIENTS + NUM_ROUTERS - 3 + (i % 3);
+        uint32_t serverIndex = NUM_CLIENTS + NUM_ROUTERS + i;
+        NetDeviceContainer dev = p2p_RouterServer.Install(nodes.Get(routerIndex), nodes.Get(serverIndex));
+        devices.push_back(dev);
+        double delay = 2.0 + (std::rand() % 9) * 1.0;
+        network[routerIndex][serverIndex] = Connection(delay, 2.0);
+        network[serverIndex][routerIndex] = Connection(delay, 2.0);
+    }
+
+    PrintNetworkTopology(network);
+
+    // Compute and print centrality measures
+    std::vector<int> degree = ComputeDegreeCentrality(network);
+    std::vector<double> eigenvector = ComputeEigenvectorCentrality(network);
+    std::vector<double> katz = ComputeKatzCentrality(network);
+    std::vector<double> pagerank = ComputePageRank(network);
+
+    std::cout << "\nCentrality Measures:" << std::endl;
+    std::cout << "Node\tDegree\tEigenvector\tKatz\t\tPageRank" << std::endl;
+    for (uint32_t i = 0; i < TOTAL_NODES; ++i) {
+        std::cout << i << "\t" << degree[i] << "\t"
+                  << eigenvector[i] << "\t"
+                  << katz[i] << "\t"
+                  << pagerank[i] << std::endl;
+    }
+
+    // Identify the highest centrality router (using degree centrality)
+    int highCentralityRouter = NUM_CLIENTS; // Routers have IDs [NUM_CLIENTS, NUM_CLIENTS+NUM_ROUTERS-1]
+    int maxDegree = degree[NUM_CLIENTS];
+    for (uint32_t i = NUM_CLIENTS; i < NUM_CLIENTS + NUM_ROUTERS; ++i) {
+        if (degree[i] > maxDegree) {
+            maxDegree = degree[i];
+            highCentralityRouter = i;
+        }
+    }
+    std::cout << "\nHighest centrality router is " << highCentralityRouter
+              << " (degree centrality = " << maxDegree << ")" << std::endl;
+
+    // Install RED queue disc on the high-centrality router’s interfaces connecting to routers/servers
+    TrafficControlHelper tchRed;
+    tchRed.SetRootQueueDisc("ns3::RedQueueDisc",
+                             "MaxSize", StringValue("3000p"),
+                             "MeanPktSize", UintegerValue(1040),
+                             "Wait", BooleanValue(false),
+                             "Gentle", BooleanValue(false),
+                             "QW", DoubleValue(0.002),
+                             "MinTh", DoubleValue(50),
+                             "MaxTh", DoubleValue(100));
+
+    // Loop over all device containers to find interfaces attached to the high-centrality router.
+    // We only install RED on interfaces where the other node is a router/server (node id >= NUM_CLIENTS).
+    for (uint32_t i = 0; i < devices.size(); i++) {
+        NetDeviceContainer devCont = devices[i];
+        for (uint32_t j = 0; j < devCont.GetN(); j++) {
+            Ptr<NetDevice> dev = devCont.Get(j);
+            uint32_t nodeId = dev->GetNode()->GetId();
+            if (nodeId == static_cast<uint32_t>(highCentralityRouter)) {
+                // Determine the other node on this link.
+                uint32_t otherId = (j == 0) ? devCont.Get(1)->GetNode()->GetId()
+                                            : devCont.Get(0)->GetNode()->GetId();
+                // Only install RED on interfaces connecting to routers/servers.
+                if (otherId >= NUM_CLIENTS) {
+                    std::cout << "Installing RED on router " << nodeId
+                              << " interface connected to node " << otherId << std::endl;
+                    // Before installing RED, ensure the node has a TrafficControlLayer
+                    Ptr<TrafficControlLayer> tc = dev->GetNode()->GetObject<TrafficControlLayer>();
+                    if (!tc) {
+                        tc = CreateObject<TrafficControlLayer>();
+                        dev->GetNode()->AggregateObject(tc);
+                    }
+                    NetDeviceContainer ndc;
+                    ndc.Add(dev);
+                    QueueDiscContainer qdisc = tchRed.Install(ndc);
+                    // (Optional) add trace callbacks to qdisc if needed.
+                }
+            }
+        }
+    }
+
+    p2p_RouterServer.EnablePcapAll("client-server-network");
+
+    InternetStackHelper internet;
+    internet.InstallAll();
+
+    Ipv4AddressHelper ipv4;
+    std::vector<Ipv4InterfaceContainer> interfaces;
+    
+    for (uint32_t i = 0; i < devices.size(); i++) {
+        std::ostringstream subnet;
+        subnet << "10." << (i + 1) << ".1.0";
+        ipv4.SetBase(subnet.str().c_str(), "255.255.255.0");
+        interfaces.push_back(ipv4.Assign(devices[i]));
+    }
+
+    // Set interface metrics based on delay
+    for (uint32_t i = 0; i < devices.size(); i++) {
+        NetDeviceContainer devCont = devices[i];
+        if (devCont.GetN() != 2) continue;
+
+        Ptr<NetDevice> dev0 = devCont.Get(0);
+        Ptr<NetDevice> dev1 = devCont.Get(1);
+        uint32_t node0Id = dev0->GetNode()->GetId();
+        uint32_t node1Id = dev1->GetNode()->GetId();
+
+        double delay = network[node0Id][node1Id].delay;
+        uint16_t metric = static_cast<uint16_t>(delay * 10); // Convert to tenths of ms
+
+        Ptr<Ipv4> ipv4Node0 = dev0->GetNode()->GetObject<Ipv4>();
+        int32_t ifIndex0 = ipv4Node0->GetInterfaceForDevice(dev0);
+        if (ifIndex0 != -1) ipv4Node0->SetMetric(ifIndex0, metric);
+
+        Ptr<Ipv4> ipv4Node1 = dev1->GetNode()->GetObject<Ipv4>();
+        int32_t ifIndex1 = ipv4Node1->GetInterfaceForDevice(dev1);
+        if (ifIndex1 != -1) ipv4Node1->SetMetric(ifIndex1, metric);
+    }
+
+    Ipv4GlobalRoutingHelper::PopulateRoutingTables();
+
+    // Setup applications: each client sends data to its best server.
+    for (uint32_t i = 0; i < NUM_CLIENTS; i++) {
+        int bestServer = findBestServer(network, i);
+        if (bestServer == -1) continue;
+
+        Ipv4Address serverAddr;
+        bool found = false;
+        for (uint32_t idx = 0; idx < devices.size(); idx++) {
+            NetDeviceContainer dev = devices[idx];
+            if (dev.Get(0)->GetNode()->GetId() == (uint32_t)bestServer) {
+                serverAddr = interfaces[idx].GetAddress(0);
+                found = true;
+                break;
+            } else if (dev.Get(1)->GetNode()->GetId() == (uint32_t)bestServer) {
+                serverAddr = interfaces[idx].GetAddress(1);
+                found = true;
+                break;
+            }
+        }
+
+        if (!found) {
+            std::cerr << "Server IP not found for client " << i << std::endl;
+            continue;
+        }
+
+        BulkSendHelper source("ns3::TcpSocketFactory", InetSocketAddress(serverAddr, 80 + i));
+        source.SetAttribute("MaxBytes", UintegerValue(0));
+        ApplicationContainer apps = source.Install(nodes.Get(i));
+        apps.Start(Seconds(0.0));
+        apps.Stop(Seconds(149.0));
+
+        PacketSinkHelper sink("ns3::TcpSocketFactory", InetSocketAddress(Ipv4Address::GetAny(), 80 + i));
+        apps = sink.Install(nodes.Get(bestServer));
+        apps.Start(Seconds(0.0));
+        apps.Stop(Seconds(150.0));
+    }
+
+    // Setup per-router tracing
+    SetupTracing(devices);
+
+    // Schedule drop logging for each router.
+    for (auto const &entry : g_dropStreams)
+    {
+        uint32_t routerId = entry.first;
+        Simulator::Schedule(Seconds(1.0), &TraceRouterDrops, routerId);
+    }
+
+    Simulator::Stop(Seconds(150));
+    Simulator::Run();
+    Simulator::Destroy();
+
+    // Automatic Plotting Section:
+    // For each router, if the trace file is non-empty, convert it to a JPEG image using GNUplot.
+    for (uint32_t routerId = NUM_CLIENTS; routerId < NUM_CLIENTS + NUM_ROUTERS; ++routerId) {
+        // Process the queue trace file.
+        {
+            std::ostringstream fileNameStream;
+            fileNameStream << "queue_router_" << routerId << ".tr";
+            std::string fileName = fileNameStream.str();
+            if (IsFileEmpty(fileName)) {
+                std::cout << "Trace file " << fileName << " is empty. Skipping conversion." << std::endl;
+            } else {
+                std::ostringstream gpCmd;
+                gpCmd << "gnuplot -e \"set terminal jpeg; "
+                      << "set output 'queue_router_" << routerId << ".jpg'; "
+                      << "plot '" << fileName << "' using 1:2 with lines title 'Queue size for router " << routerId << "'\"";
+                std::cout << "Executing: " << gpCmd.str() << std::endl;
+                (void)system(gpCmd.str().c_str());
+            }
+        }
+
+        // Process the drops trace file.
+        {
+            std::ostringstream fileNameStream;
+            fileNameStream << "drops_router_" << routerId << ".tr";
+            std::string fileName = fileNameStream.str();
+            if (IsFileEmpty(fileName)) {
+                std::cout << "Trace file " << fileName << " is empty. Skipping conversion." << std::endl;
+            } else {
+                std::ostringstream gpCmd;
+                gpCmd << "gnuplot -e \"set terminal jpeg; "
+                      << "set output 'drops_router_" << routerId << ".jpg'; "
+                      << "plot '" << fileName << "' using 1:2 with lines title 'Packet drops for router " << routerId << "'\"";
+                std::cout << "Executing: " << gpCmd.str() << std::endl;
+                (void)system(gpCmd.str().c_str());
+            }
+        }
+    }
+
+    return 0;
+}
