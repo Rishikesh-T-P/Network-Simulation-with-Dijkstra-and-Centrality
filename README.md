@@ -31,13 +31,3 @@ The simulation includes:
 - **RED Queue Management:** Improves congestion control on critical routers.
 - **Automated Graph Plotting:** Converts trace files into JPEG images using GNUplot.
 
----
-
-## Repository Structure
-/Network-Simulation-NS3/
-├── /src/ # Source code files
-├── /results/ # Generated output files
-├── /docs/ # Documentation (optional)
-├── README.md # Project overview and instructions
-├── LICENSE # License file
-└── .gitignore # Ignore unnecessary file
