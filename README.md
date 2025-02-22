@@ -7,11 +7,10 @@ This project simulates a network of clients, routers, and servers using NS-3. It
 ## Table of Contents
 1. [Project Overview](#project-overview)
 2. [Features](#features)
-3. [Repository Structure](#repository-structure)
-4. [How to Run](#how-to-run)
-5. [Results](#results)
-6. [License](#license)
-7. [Acknowledgements](#acknowledgements)
+3. [How to Run](#how-to-run)
+4. [Results](#results)
+5. [License](#license)
+6. [Acknowledgements](#acknowledgements)
 
 ---
 
@@ -30,4 +29,18 @@ The simulation includes:
 - **Centrality Analysis:** Identifies key routers using Degree, Eigenvector, Katz, and PageRank centrality.
 - **RED Queue Management:** Improves congestion control on critical routers.
 - **Automated Graph Plotting:** Converts trace files into JPEG images using GNUplot.
+
+  
+---
+
+## How to Run
+1. **Prerequisites:**
+   - Install [NS-3](https://www.nsnam.org/) on your system.
+   - Ensure GNUplot is installed for graph generation.
+
+2. **Clone the Repository:**
+   ```bash
+   git clone https://github.com/your-username/Network-Simulation-NS3.git
+   cd Network-Simulation-NS3
+
 
